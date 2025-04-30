@@ -5,14 +5,14 @@ import io
 st.set_page_config(page_title="Ad Attribution & ROAS Dashboard", layout="wide")
 st.title("📊 ROAS Report by Platform and Ad")
 
-# File uploads
+# Uploads
 with st.sidebar:
     st.header("📁 Upload Your CSVs")
     current_shopify_file = st.file_uploader("🛒 Current Month Shopify CSV", type="csv")
     historical_shopify_files = st.file_uploader("🕰️ Historical Shopify CSVs", type="csv", accept_multiple_files=True)
     meta_file = st.file_uploader("📘 Meta Ads CSV", type="csv")
     google_file = st.file_uploader("🔍 Google Ads CSV", type="csv")
-    show_comparison = st.checkbox("📆 Show Monthly Comparison Table")
+    show_comparison = st.checkbox("📆 Show Monthly Revenue Comparison")
 
 # Loaders
 def load_shopify(file):
@@ -64,7 +64,7 @@ def load_google(file):
         st.error(f"Google Ads CSV Error: {e}")
         return pd.DataFrame()
 
-# Platform detection
+# Identify platform
 def identify_platform(row):
     src = str(row.get("Order UTM source", "")).lower()
     med = str(row.get("Order UTM medium", "")).lower()
@@ -76,7 +76,7 @@ def identify_platform(row):
     else:
         return "Other"
 
-# ROAS summary tables
+# ROAS by platform
 def platform_summary(shopify_df, spend_df):
     shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
     filtered = shopify_df[shopify_df["Platform"].isin(["Google Ads", "Meta Ads"])]
@@ -89,6 +89,7 @@ def platform_summary(shopify_df, spend_df):
     summary["ROAS"] = summary["Revenue"] / summary["Spend"]
     return summary
 
+# ROAS by ad (Meta only)
 def ad_summary(shopify_df, spend_df):
     shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
     shopify_df = shopify_df.rename(columns={"Order UTM campaign": "ad_name"})
@@ -102,10 +103,9 @@ def ad_summary(shopify_df, spend_df):
     merged["ROAS"] = merged["Revenue"] / merged["spend"]
     return merged
 
-# Final comparison logic
+# Monthly comparison (March → April only)
 def comparison_table(full_df):
     try:
-        full_df = full_df.copy()
         full_df = full_df.dropna(subset=["Customer last order date"])
         full_df["Customer last order date"] = pd.to_datetime(full_df["Customer last order date"], errors="coerce")
         full_df = full_df.dropna(subset=["Customer last order date"])
@@ -113,31 +113,43 @@ def comparison_table(full_df):
         full_df = full_df[full_df["Total sales"] > 0]
         full_df["Platform"] = full_df.apply(identify_platform, axis=1)
         full_df["Month"] = full_df["Customer last order date"].dt.to_period("M").dt.to_timestamp()
+
+        # Filter to just March and April 2025
+        allowed_months = pd.to_datetime(["2025-03-01", "2025-04-01"])
+        full_df = full_df[full_df["Month"].isin(allowed_months)]
         filtered = full_df[full_df["Platform"].isin(["Google Ads", "Meta Ads"])]
+
+        # Aggregate
         monthly = (
             filtered.groupby(["Platform", "Month"])
             .agg(Revenue=("Total sales", "sum"))
             .sort_values(["Platform", "Month"])
             .reset_index()
         )
+
+        # MoM Change (only for April)
         monthly["MoM % Change"] = (
-            monthly.groupby("Platform")["Revenue"].pct_change() * 100
+            monthly.groupby("Platform")["Revenue"].pct_change().fillna(0) * 100
         ).round(2)
+
+        # Format
         monthly["Revenue"] = monthly["Revenue"].round(2)
         monthly["Month"] = monthly["Month"].dt.strftime("%Y-%m")
+
         return monthly
+
     except Exception as e:
         st.error(f"Comparison table error: {e}")
         return pd.DataFrame()
 
-# Load data
+# Load inputs
 current_shopify_df = load_shopify(current_shopify_file) if current_shopify_file else pd.DataFrame()
 historical_shopify_df = load_shopify_multiple(historical_shopify_files) if historical_shopify_files else pd.DataFrame()
 meta_df = load_meta(meta_file) if meta_file else pd.DataFrame()
 google_df = load_google(google_file) if google_file else pd.DataFrame()
 spend_df = pd.concat([meta_df, google_df], ignore_index=True)
 
-# ROAS + Ads (from current month only)
+# ROAS output
 if not current_shopify_df.empty and not spend_df.empty:
     st.subheader("📊 ROAS by Platform")
     st.dataframe(platform_summary(current_shopify_df, spend_df), use_container_width=True)
@@ -145,9 +157,9 @@ if not current_shopify_df.empty and not spend_df.empty:
     st.subheader("📣 ROAS by Meta Ad Campaign")
     st.dataframe(ad_summary(current_shopify_df, spend_df), use_container_width=True)
 
-# Comparison Table (from historical + current merged)
+# Monthly comparison
 if show_comparison and (not historical_shopify_df.empty or not current_shopify_df.empty):
-    full_comparison_df = pd.concat([historical_shopify_df, current_shopify_df], ignore_index=True)
-    st.subheader("📆 Monthly Revenue Comparison")
-    st.dataframe(comparison_table(full_comparison_df), use_container_width=True)
+    full_df = pd.concat([historical_shopify_df, current_shopify_df], ignore_index=True)
+    st.subheader("📆 Monthly Revenue Comparison (Mar → Apr 2025)")
+    st.dataframe(comparison_table(full_df), use_container_width=True)
 
