@@ -2,42 +2,48 @@ import streamlit as st
 import pandas as pd
 
 st.set_page_config(page_title="Ad Attribution & ROAS Dashboard", layout="wide")
-st.title("📊 Multi-Channel Attribution & ROAS Dashboard")
+st.title("📊 ROAS Report by Platform and Ad")
 
 # --- File Uploads ---
 with st.sidebar:
-    st.header("📁 Upload CSVs")
+    st.header("📁 Upload Your CSVs")
     shopify_file = st.file_uploader("🛒 Shopify Orders CSV", type="csv")
-    google_file = st.file_uploader("🔍 Google Ads CSV", type="csv")
     meta_file = st.file_uploader("📘 Meta Ads CSV", type="csv")
+    google_file = st.file_uploader("🔍 Google Ads CSV", type="csv")
 
-# --- Load Data ---
+# --- Robust Loaders ---
 @st.cache_data
-def load_shopify_csv(file):
-    if file is None:
-        return pd.DataFrame()
+def load_shopify(file):
     try:
-        df = pd.read_csv(file, quotechar='"', skip_blank_lines=True, skiprows=[1])
+        df = pd.read_csv(file, quotechar='"', skiprows=[1], skip_blank_lines=True)
         df.columns = df.columns.str.strip()
         return df
     except Exception as e:
-        st.error(f"Shopify CSV error: {e}")
+        st.error(f"Shopify CSV Error: {e}")
         return pd.DataFrame()
 
 @st.cache_data
-def load_other_csv(file):
-    if file is None:
-        return pd.DataFrame()
+def load_google(file):
     try:
-        return pd.read_csv(file)
-    except:
+        return pd.read_csv(file, encoding="utf-8", skip_blank_lines=True, on_bad_lines="skip")
+    except Exception as e:
+        st.error(f"Google CSV Error: {e}")
         return pd.DataFrame()
 
-shopify_df = load_shopify_csv(shopify_file)
-google_df = load_other_csv(google_file)
-meta_df = load_other_csv(meta_file)
+@st.cache_data
+def load_meta(file):
+    try:
+        return pd.read_csv(file, encoding="utf-8")
+    except Exception as e:
+        st.error(f"Meta CSV Error: {e}")
+        return pd.DataFrame()
 
-# --- Helper Functions ---
+# --- Load Uploaded Data ---
+shopify_df = load_shopify(shopify_file) if shopify_file else pd.DataFrame()
+meta_df = load_meta(meta_file) if meta_file else pd.DataFrame()
+google_df = load_google(google_file) if google_file else pd.DataFrame()
+
+# --- Identify Platform ---
 def identify_platform(row):
     src = str(row.get("Order UTM source", "")).lower()
     med = str(row.get("Order UTM medium", "")).lower()
@@ -55,60 +61,60 @@ def identify_platform(row):
     else:
         return "Other"
 
-def clean_spend_data(df, platform_name):
-    if df is None or df.empty:
-        return pd.DataFrame(columns=["campaign", "spend", "platform", "ad_name"])
-    df.columns = df.columns.str.lower().str.strip()
-    if platform_name == "Meta Ads" and "amount spent (usd)" in df.columns and "campaign" in df.columns:
-        df["spend"] = df["amount spent (usd)"]
-        df["platform"] = platform_name
-        df = df.rename(columns={"ad name": "ad_name"})
-        return df[["campaign", "spend", "platform", "ad_name"]]
-    elif platform_name == "Google Ads" and "cost" in df.columns and "campaign" in df.columns:
-        df["spend"] = df["cost"]
-        df["platform"] = platform_name
-        df = df.rename(columns={"ad name": "ad_name"})
-        return df[["campaign", "spend", "platform", "ad_name"]]
-    return pd.DataFrame(columns=["campaign", "spend", "platform", "ad_name"])
+# --- Clean Spend Data ---
+def clean_meta(df):
+    if df.empty or "Ad name" not in df.columns or "Amount spent (USD)" not in df.columns:
+        return pd.DataFrame()
+    df = df.rename(columns={"Ad name": "ad_name", "Amount spent (USD)": "spend"})
+    df["platform"] = "Meta Ads"
+    return df[["ad_name", "spend", "platform"]]
 
-def aggregate_platform_summary(shopify_df, spend_df):
-    rev = shopify_df[shopify_df["Platform"].isin(["Meta Ads", "Google Ads"])].groupby("Platform").agg(
+def clean_google(df):
+    df.columns = df.columns.str.lower().str.strip()
+    if df.empty or "campaign" not in df.columns or "cost" not in df.columns:
+        return pd.DataFrame()
+    df = df.rename(columns={"cost": "spend", "campaign": "ad_name"})
+    df["platform"] = "Google Ads"
+    return df[["ad_name", "spend", "platform"]]
+
+# --- Aggregate Reports ---
+def platform_summary(shopify_df, spend_df):
+    shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
+    revenue = shopify_df.groupby("Platform").agg(
         Orders=("Orders", "sum"),
         Revenue=("Total sales", "sum")
     ).reset_index()
-    spend_summary = spend_df.groupby("platform").agg(
-        Spend=("spend", "sum")
+    spend = spend_df.groupby("platform").agg(Spend=("spend", "sum")).reset_index()
+    summary = pd.merge(revenue, spend, left_on="Platform", right_on="platform", how="inner").drop(columns="platform")
+    summary["ROAS"] = summary["Revenue"] / summary["Spend"]
+    return summary
+
+def ad_summary(shopify_df, spend_df):
+    shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
+    shopify_df = shopify_df.rename(columns={"Order UTM campaign": "ad_name"})
+    sales = shopify_df.groupby(["Platform", "ad_name"]).agg(
+        Orders=("Orders", "sum"),
+        Revenue=("Total sales", "sum")
     ).reset_index()
-    merged = pd.merge(rev, spend_summary, left_on="Platform", right_on="platform", how="left").drop(columns="platform")
-    merged["ROAS"] = merged["Revenue"] / merged["Spend"]
+    merged = pd.merge(sales, spend_df, on=["Platform", "ad_name"], how="inner")
+    merged["ROAS"] = merged["Revenue"] / merged["spend"]
     return merged
 
-def aggregate_ad_summary(shopify_df, spend_df):
-    sales = shopify_df.groupby(["Platform", "Order UTM campaign"]).agg(
-        Orders=("Orders", "sum"),
-        Revenue=("Total sales", "sum")
-    ).reset_index()
-    ads = pd.merge(sales, spend_df, left_on="Order UTM campaign", right_on="campaign", how="inner")
-    ads["ROAS"] = ads["Revenue"] / ads["spend"]
-    return ads
-
-# --- Main App ---
+# --- MAIN ---
 if not shopify_df.empty:
-    shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
+    meta_clean = clean_meta(meta_df)
+    google_clean = clean_google(google_df)
+    all_spend = pd.concat([meta_clean, google_clean], ignore_index=True)
 
-    google_spend = clean_spend_data(google_df, "Google Ads")
-    meta_spend = clean_spend_data(meta_df, "Meta Ads")
-    combined_spend = pd.concat([google_spend, meta_spend])
+    if not all_spend.empty:
+        st.subheader("📊 ROAS by Platform")
+        platform_df = platform_summary(shopify_df, all_spend)
+        st.dataframe(platform_df, use_container_width=True)
 
-    # --- Table 1: ROAS by Platform ---
-    if not combined_spend.empty:
-        st.subheader("📈 ROAS by Platform")
-        platform_summary = aggregate_platform_summary(shopify_df, combined_spend)
-        st.dataframe(platform_summary, use_container_width=True)
-
-    # --- Table 2: ROAS by Ad Campaign ---
-    st.subheader("📣 ROAS by Ad Campaign")
-    ad_summary = aggregate_ad_summary(shopify_df, combined_spend)
-    st.dataframe(ad_summary[["platform", "campaign", "ad_name", "spend", "Orders", "Revenue", "ROAS"]], use_container_width=True)
+        st.subheader("📣 ROAS by Ad Campaign")
+        ad_df = ad_summary(shopify_df, all_spend)
+        st.dataframe(ad_df, use_container_width=True)
+    else:
+        st.warning("Upload Meta or Google ad spend to see ROAS reports.")
 else:
     st.warning("Please upload a valid Shopify CSV to begin.")
