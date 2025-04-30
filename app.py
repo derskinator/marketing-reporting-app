@@ -12,19 +12,19 @@ with st.sidebar:
     google_file = st.file_uploader("🔍 Google Ads CSV", type="csv")
     meta_file = st.file_uploader("📘 Meta Ads CSV", type="csv")
 
+# --- Load Data ---
 @st.cache_data
 def load_csv(file):
+    if file is None:
+        return pd.DataFrame()
     try:
-        return pd.read_csv(file)
-    except:
-        try:
-            return pd.read_csv(file, sep='\t')
-        except:
-            try:
-                return pd.read_csv(file, sep=';')
-            except Exception as e:
-                st.error(f"Failed to parse file: {e}")
-                return pd.DataFrame()
+        df = pd.read_csv(file)
+        if df.empty or len(df.columns) <= 1:
+            raise ValueError("Empty or corrupt file")
+        return df
+    except Exception as e:
+        st.error(f"Failed to parse file: {e}")
+        return pd.DataFrame()
 
 shopify_df = load_csv(shopify_file)
 google_df = load_csv(google_file)
@@ -37,7 +37,7 @@ def identify_platform(row):
     ref = str(row.get("Order referrer name", "")).lower()
     if src == "google" and med == "ad":
         return "Google Ads"
-    elif src in ["facebook", "meta", "instagram"] and med == "ad":
+    elif src in ["fb", "facebook", "ig", "instagram"] and med == "ad":
         return "Meta Ads"
     elif src == "google":
         return "Google Organic"
@@ -60,11 +60,16 @@ def clean_spend_data(df, platform_name):
     return pd.DataFrame(columns=["campaign", "spend", "ad_name", "platform"])
 
 def calculate_roas(spend_df, shopify_df):
-    shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
     campaign_sales = shopify_df.groupby(["Platform", "Order UTM campaign"]).agg(
         Revenue=("Total sales", "sum")
     ).reset_index()
-    merged = pd.merge(campaign_sales, spend_df, left_on="Order UTM campaign", right_on="campaign", how="inner")
+    merged = pd.merge(
+        campaign_sales,
+        spend_df,
+        left_on="Order UTM campaign",
+        right_on="campaign",
+        how="inner"
+    )
     merged = merged[merged["platform"].isin(["Meta Ads", "Google Ads"])]
     merged["ROAS"] = merged["Revenue"] / merged["spend"]
     return merged
@@ -72,7 +77,9 @@ def calculate_roas(spend_df, shopify_df):
 # --- Main App ---
 if not shopify_df.empty:
     shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
-    shopify_df["is_new_customer"] = ~shopify_df.duplicated(subset=["Order referrer name"], keep='first')
+    if "customer_id" not in shopify_df.columns:
+        shopify_df["customer_id"] = shopify_df.get("Order referrer name", pd.Series(range(len(shopify_df))))
+    shopify_df["is_new_customer"] = ~shopify_df.duplicated(subset=["customer_id"], keep='first')
 
     google_spend = clean_spend_data(google_df, "Google Ads")
     meta_spend = clean_spend_data(meta_df, "Meta Ads")
