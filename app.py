@@ -12,7 +12,7 @@ with st.sidebar:
     meta_file = st.file_uploader("📘 Meta Ads CSV", type="csv")
     google_file = st.file_uploader("🔍 Google Ads CSV", type="csv")
 
-# Shopify loader
+# Load Shopify data
 def load_shopify(file):
     try:
         df = pd.read_csv(file, quotechar='"', skiprows=[1], skip_blank_lines=True)
@@ -22,7 +22,7 @@ def load_shopify(file):
         st.error(f"Shopify CSV Error: {e}")
         return pd.DataFrame()
 
-# Meta loader
+# Load Meta Ads data
 def load_meta(file):
     try:
         df = pd.read_csv(file)
@@ -33,7 +33,7 @@ def load_meta(file):
         st.error(f"Meta CSV Error: {e}")
         return pd.DataFrame()
 
-# Fixed Google loader (Total: Account only)
+# Load Google Ads using only Total: Account row
 def load_google_fixed(file):
     try:
         lines = file.getvalue().decode("utf-8").splitlines()
@@ -55,13 +55,13 @@ def load_google_fixed(file):
         st.error(f"Google CSV processing failed: {e}")
         return pd.DataFrame()
 
-# Platform tagging logic
+# Platform tagging logic (final fix)
 def identify_platform(row):
-    ref = str(row.get("Order referrer name", "")).lower()
-    med = str(row.get("Order UTM medium", "")).lower()
     src = str(row.get("Order UTM source", "")).lower()
+    med = str(row.get("Order UTM medium", "")).lower()
+    ref = str(row.get("Order referrer name", "")).lower()
 
-    if ref == "google" and med == "ad":
+    if src == "google" and med == "ad":
         return "Google Ads"
     elif ref in ["facebook", "instagram"] or src in ["fb", "ig", "facebook", "instagram"]:
         return "Meta Ads"
@@ -92,7 +92,7 @@ def ad_summary(shopify_df, spend_df):
     merged["ROAS"] = merged["Revenue"] / merged["spend"]
     return merged
 
-# Load and process
+# Load + combine
 shopify_df = load_shopify(shopify_file) if shopify_file else pd.DataFrame()
 meta_df = load_meta(meta_file) if meta_file else pd.DataFrame()
 google_df = load_google_fixed(google_file) if google_file else pd.DataFrame()
