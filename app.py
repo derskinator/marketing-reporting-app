@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import csv
 
 st.set_page_config(page_title="Ad Attribution & ROAS Dashboard", layout="wide")
 st.title("📊 ROAS Report by Platform and Ad")
@@ -36,7 +37,12 @@ def load_google_auto(file):
     try:
         lines = file.getvalue().decode("utf-8").splitlines()
         header_row = next(i for i, line in enumerate(lines) if "campaign" in line.lower())
-        df = pd.read_csv(io.StringIO("\n".join(lines[header_row:])))
+
+        # Detect delimiter
+        dialect = csv.Sniffer().sniff(lines[header_row])
+        delimiter = dialect.delimiter
+
+        df = pd.read_csv(io.StringIO("\n".join(lines[header_row:])), delimiter=delimiter)
         df.columns = df.columns.str.lower().str.strip()
         df = df.rename(columns={"cost": "spend", "campaign": "ad_name"})
         df["Platform"] = "Google Ads"
@@ -86,7 +92,7 @@ def ad_summary(shopify_df, spend_df):
     merged["ROAS"] = merged["Revenue"] / merged["spend"]
     return merged
 
-# Load + combine
+# Load and merge all
 shopify_df = load_shopify(shopify_file) if shopify_file else pd.DataFrame()
 meta_df = load_meta(meta_file) if meta_file else pd.DataFrame()
 google_df = load_google_auto(google_file) if google_file else pd.DataFrame()
@@ -103,4 +109,5 @@ if not shopify_df.empty and not spend_df.empty:
     st.dataframe(ad_df, use_container_width=True)
 else:
     st.warning("Upload both Shopify and at least one ad platform CSV to see ROAS reporting.")
+
 
