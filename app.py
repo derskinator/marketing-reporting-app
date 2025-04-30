@@ -59,25 +59,35 @@ def clean_spend_data(df, platform_name):
     if df is None or df.empty:
         return pd.DataFrame(columns=["campaign", "spend", "ad_name", "platform"])
     df.columns = df.columns.str.lower().str.strip()
-    if "campaign" in df.columns and "spend" in df.columns:
-        df["platform"] = platform_name
-        return df[["campaign", "spend", "ad_name", "platform"]]
-    return pd.DataFrame(columns=["campaign", "spend", "ad_name", "platform"])
+    if platform_name == "Meta Ads" and "amount spent (usd)" in df.columns:
+        df["spend"] = df["amount spent (usd)"]
+    elif platform_name == "Google Ads" and "cost" in df.columns:
+        df["spend"] = df["cost"]
+    else:
+        return pd.DataFrame(columns=["campaign", "spend", "ad_name", "platform"])
+    df["platform"] = platform_name
+    return df[["campaign", "spend", "ad_name", "platform"]]
 
-def calculate_roas(spend_df, shopify_df):
-    campaign_sales = shopify_df.groupby(["Platform", "Order UTM campaign"]).agg(
+def aggregate_platform_summary(shopify_df, spend_df):
+    rev = shopify_df[shopify_df["Platform"].isin(["Meta Ads", "Google Ads"])].groupby("Platform").agg(
+        Orders=("Orders", "sum"),
         Revenue=("Total sales", "sum")
     ).reset_index()
-    merged = pd.merge(
-        campaign_sales,
-        spend_df,
-        left_on="Order UTM campaign",
-        right_on="campaign",
-        how="inner"
-    )
-    merged = merged[merged["platform"].isin(["Meta Ads", "Google Ads"])]
-    merged["ROAS"] = merged["Revenue"] / merged["spend"]
+    spend_summary = spend_df.groupby("platform").agg(
+        Spend=("spend", "sum")
+    ).reset_index()
+    merged = pd.merge(rev, spend_summary, left_on="Platform", right_on="platform", how="left").drop(columns="platform")
+    merged["ROAS"] = merged["Revenue"] / merged["Spend"]
     return merged
+
+def aggregate_ad_summary(shopify_df, spend_df):
+    sales = shopify_df.groupby(["Platform", "Order UTM campaign"]).agg(
+        Orders=("Orders", "sum"),
+        Revenue=("Total sales", "sum")
+    ).reset_index()
+    ads = pd.merge(sales, spend_df, left_on="Order UTM campaign", right_on="campaign", how="inner")
+    ads["ROAS"] = ads["Revenue"] / ads["spend"]
+    return ads
 
 # --- Main App ---
 if not shopify_df.empty:
@@ -89,30 +99,18 @@ if not shopify_df.empty:
     meta_spend = clean_spend_data(meta_df, "Meta Ads")
     combined_spend = pd.concat([google_spend, meta_spend])
 
-    # --- ROAS Table ---
+    # --- ROAS by Platform ---
     if not combined_spend.empty:
-        st.subheader("📈 ROAS by Platform & Campaign")
-        roas_df = calculate_roas(combined_spend, shopify_df)
-        st.dataframe(roas_df[["platform", "campaign", "ad_name", "spend", "Revenue", "ROAS"]], use_container_width=True)
+        st.subheader("📈 ROAS by Platform")
+        platform_summary = aggregate_platform_summary(shopify_df, combined_spend)
+        st.dataframe(platform_summary, use_container_width=True)
 
-    # --- Total Aggregated Summary by Platform ---
-    st.subheader("📊 Total Revenue & Orders by Platform")
-    agg_summary = shopify_df[shopify_df["Platform"].isin(["Meta Ads", "Google Ads"])].groupby("Platform").agg(
-        Orders=("Orders", "sum"),
-        Revenue=("Total sales", "sum")
-    ).reset_index()
-    st.dataframe(agg_summary, use_container_width=True)
+    # --- ROAS by Ad Campaign ---
+    st.subheader("📣 ROAS by Ad Campaign")
+    ad_summary = aggregate_ad_summary(shopify_df, combined_spend)
+    st.dataframe(ad_summary[["platform", "campaign", "ad_name", "spend", "Orders", "Revenue", "ROAS"]], use_container_width=True)
 
-    # --- Sales by Ad Table ---
-    st.subheader("📣 Attributed Sales by Ad (Meta & Google Only)")
-    ad_sales = shopify_df[shopify_df["Platform"].isin(["Meta Ads", "Google Ads"])]
-    ad_sales_summary = ad_sales.groupby(["Platform", "Order UTM campaign"]).agg(
-        Orders=("Orders", "sum"),
-        Sales=("Total sales", "sum")
-    ).reset_index()
-    st.dataframe(ad_sales_summary, use_container_width=True)
-
-    # --- New Customers by Platform ---
+    # --- New Customers ---
     st.subheader("🧍‍♂️ New Customers by Platform")
     new_cust_summary = shopify_df[shopify_df["is_new_customer"]].groupby("Platform").agg(
         New_Customers=("is_new_customer", "count")
