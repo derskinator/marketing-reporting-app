@@ -102,6 +102,8 @@ def comparison_table(shopify_df):
 
         grouped["MoM % Change"] = grouped.groupby("Platform")["Revenue"].pct_change() * 100
         grouped["MoM % Change"] = grouped["MoM % Change"].round(2)
+        grouped["Revenue"] = grouped["Revenue"].round(2)
+        grouped["Month"] = grouped["Month"].dt.strftime("%Y-%m")
 
         return grouped
     except Exception as e:
