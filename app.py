@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import io
-import csv
 
 st.set_page_config(page_title="Ad Attribution & ROAS Dashboard", layout="wide")
 st.title("📊 ROAS Report by Platform and Ad")
@@ -33,16 +32,11 @@ def load_meta(file):
         st.error(f"Meta CSV Error: {e}")
         return pd.DataFrame()
 
-def load_google_auto(file):
+def load_google_fixed(file):
     try:
         lines = file.getvalue().decode("utf-8").splitlines()
-        header_row = next(i for i, line in enumerate(lines) if "campaign" in line.lower())
-
-        # Detect delimiter
-        dialect = csv.Sniffer().sniff(lines[header_row])
-        delimiter = dialect.delimiter
-
-        df = pd.read_csv(io.StringIO("\n".join(lines[header_row:])), delimiter=delimiter)
+        trimmed = "\n".join(lines[2:])  # Skip title and date range
+        df = pd.read_csv(io.StringIO(trimmed), delimiter=",")
         df.columns = df.columns.str.lower().str.strip()
         df = df.rename(columns={"cost": "spend", "campaign": "ad_name"})
         df["Platform"] = "Google Ads"
@@ -51,7 +45,7 @@ def load_google_auto(file):
         st.error(f"Google CSV auto-cleaning failed: {e}")
         return pd.DataFrame()
 
-# Platform detection
+# Platform tagging
 def identify_platform(row):
     src = str(row.get("Order UTM source", "")).lower()
     med = str(row.get("Order UTM medium", "")).lower()
@@ -69,7 +63,7 @@ def identify_platform(row):
     else:
         return "Other"
 
-# Aggregation
+# Aggregations
 def platform_summary(shopify_df, spend_df):
     shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
     revenue = shopify_df.groupby("Platform").agg(
@@ -92,13 +86,13 @@ def ad_summary(shopify_df, spend_df):
     merged["ROAS"] = merged["Revenue"] / merged["spend"]
     return merged
 
-# Load and merge all
+# Load + merge
 shopify_df = load_shopify(shopify_file) if shopify_file else pd.DataFrame()
 meta_df = load_meta(meta_file) if meta_file else pd.DataFrame()
-google_df = load_google_auto(google_file) if google_file else pd.DataFrame()
+google_df = load_google_fixed(google_file) if google_file else pd.DataFrame()
 spend_df = pd.concat([meta_df, google_df], ignore_index=True)
 
-# Dashboard Output
+# Dashboard
 if not shopify_df.empty and not spend_df.empty:
     st.subheader("📊 ROAS by Platform")
     platform_df = platform_summary(shopify_df, spend_df)
@@ -109,5 +103,3 @@ if not shopify_df.empty and not spend_df.empty:
     st.dataframe(ad_df, use_container_width=True)
 else:
     st.warning("Upload both Shopify and at least one ad platform CSV to see ROAS reporting.")
-
-
