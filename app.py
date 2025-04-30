@@ -45,28 +45,23 @@ def load_google_fixed(file):
         st.error(f"Google CSV auto-cleaning failed: {e}")
         return pd.DataFrame()
 
-# Platform tagging
+# Define Platform logic based on your clarified rules
 def identify_platform(row):
-    src = str(row.get("Order UTM source", "")).lower()
-    med = str(row.get("Order UTM medium", "")).lower()
     ref = str(row.get("Order referrer name", "")).lower()
-    if (src == "google" and med == "ad") or ("google" in ref and med == "ad"):
+    med = str(row.get("Order UTM medium", "")).lower()
+    src = str(row.get("Order UTM source", "")).lower()
+
+    if ref == "google" and med == "ad":
         return "Google Ads"
-    elif (src in ["fb", "facebook", "ig", "instagram"] and med == "ad") or ref in ["facebook", "instagram"]:
+    elif ref in ["facebook", "instagram"] or src in ["fb", "ig", "facebook", "instagram"]:
         return "Meta Ads"
-    elif src == "google":
-        return "Google Organic"
-    elif ref in ["google", "bing", "yahoo"]:
-        return "Search (Organic)"
-    elif src:
-        return src.title()
     else:
         return "Other"
 
-# Aggregations
+# Platform-level aggregation
 def platform_summary(shopify_df, spend_df):
     shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
-    revenue = shopify_df.groupby("Platform").agg(
+    revenue = shopify_df[shopify_df["Platform"].isin(["Google Ads", "Meta Ads"])].groupby("Platform").agg(
         Orders=("Orders", "sum"),
         Revenue=("Total sales", "sum")
     ).reset_index()
@@ -75,10 +70,11 @@ def platform_summary(shopify_df, spend_df):
     summary["ROAS"] = summary["Revenue"] / summary["Spend"]
     return summary
 
+# Ad-level aggregation
 def ad_summary(shopify_df, spend_df):
     shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
     shopify_df = shopify_df.rename(columns={"Order UTM campaign": "ad_name"})
-    sales = shopify_df.groupby(["Platform", "ad_name"]).agg(
+    sales = shopify_df[shopify_df["Platform"].isin(["Google Ads", "Meta Ads"])].groupby(["Platform", "ad_name"]).agg(
         Orders=("Orders", "sum"),
         Revenue=("Total sales", "sum")
     ).reset_index()
@@ -86,7 +82,7 @@ def ad_summary(shopify_df, spend_df):
     merged["ROAS"] = merged["Revenue"] / merged["spend"]
     return merged
 
-# Load + merge
+# Load & merge
 shopify_df = load_shopify(shopify_file) if shopify_file else pd.DataFrame()
 meta_df = load_meta(meta_file) if meta_file else pd.DataFrame()
 google_df = load_google_fixed(google_file) if google_file else pd.DataFrame()
