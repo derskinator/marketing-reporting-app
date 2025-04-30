@@ -93,21 +93,17 @@ def ad_summary(shopify_df, spend_df):
 def comparison_table(shopify_df):
     try:
         shopify_df["Customer last order date"] = pd.to_datetime(shopify_df["Customer last order date"], errors="coerce")
-        shopify_df["Month"] = shopify_df["Customer last order date"].dt.to_period("M").astype(str)
+        shopify_df["Month"] = shopify_df["Customer last order date"].dt.to_period("M").dt.to_timestamp()
         shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
 
-        monthly = shopify_df[shopify_df["Platform"].isin(["Google Ads", "Meta Ads"])]\
-            .groupby(["Platform", "Month"]).agg(Revenue=("Total sales", "sum")).reset_index()
+        df = shopify_df[shopify_df["Platform"].isin(["Google Ads", "Meta Ads"])]
+        grouped = df.groupby(["Platform", "Month"]).agg(Revenue=("Total sales", "sum")).reset_index()
+        grouped = grouped.sort_values(["Platform", "Month"])
 
-        monthly["Month"] = pd.to_datetime(monthly["Month"])
-        current_month = monthly["Month"].max()
-        last_month = current_month - pd.DateOffset(months=1)
-        last_year = current_month - pd.DateOffset(years=1)
+        grouped["MoM % Change"] = grouped.groupby("Platform")["Revenue"].pct_change() * 100
+        grouped["MoM % Change"] = grouped["MoM % Change"].round(2)
 
-        compare = monthly[monthly["Month"].isin([current_month, last_month, last_year])]
-        pivoted = compare.pivot(index="Platform", columns="Month", values="Revenue").reset_index()
-        pivoted.columns.name = None
-        return pivoted
+        return grouped
     except Exception as e:
         st.error(f"Comparison table error: {e}")
         return pd.DataFrame()
