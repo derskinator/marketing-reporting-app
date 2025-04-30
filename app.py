@@ -5,14 +5,14 @@ import io
 st.set_page_config(page_title="Ad Attribution & ROAS Dashboard", layout="wide")
 st.title("📊 ROAS Report by Platform and Ad")
 
-# File uploads
+# Uploads
 with st.sidebar:
     st.header("📁 Upload Your CSVs")
     shopify_file = st.file_uploader("🛒 Shopify Orders CSV", type="csv")
     meta_file = st.file_uploader("📘 Meta Ads CSV", type="csv")
     google_file = st.file_uploader("🔍 Google Ads CSV", type="csv")
 
-# Load Shopify data
+# Loaders
 def load_shopify(file):
     try:
         df = pd.read_csv(file, quotechar='"', skiprows=[1], skip_blank_lines=True)
@@ -22,7 +22,6 @@ def load_shopify(file):
         st.error(f"Shopify CSV Error: {e}")
         return pd.DataFrame()
 
-# Load Meta Ads data
 def load_meta(file):
     try:
         df = pd.read_csv(file)
@@ -33,29 +32,22 @@ def load_meta(file):
         st.error(f"Meta CSV Error: {e}")
         return pd.DataFrame()
 
-# Load Google Ads using only Total: Account row
-def load_google_fixed(file):
+def load_google_per_campaign(file):
     try:
         lines = file.getvalue().decode("utf-8").splitlines()
-        trimmed = "\n".join(lines[2:])  # Skip title and date range
+        trimmed = "\n".join(lines[2:])  # Skip report title & date range
         df = pd.read_csv(io.StringIO(trimmed), delimiter=",")
         df.columns = df.columns.str.strip()
-
-        total_row = df[df["Campaign status"].str.strip() == "Total: Account"]
-        if total_row.empty:
-            raise ValueError("Missing 'Total: Account' row in Google Ads report")
-
-        spend = total_row["Cost"].astype(float).values[0]
-        return pd.DataFrame([{
-            "ad_name": "Total Account Spend",
-            "spend": spend,
-            "Platform": "Google Ads"
-        }])
+        df = df[~df["Campaign status"].str.strip().eq("Total: Account")]  # Exclude total row
+        df = df.rename(columns={"Campaign": "ad_name", "Cost": "spend"})
+        df["Platform"] = "Google Ads"
+        df["spend"] = pd.to_numeric(df["spend"], errors="coerce")
+        return df[["ad_name", "spend", "Platform"]].dropna()
     except Exception as e:
         st.error(f"Google CSV processing failed: {e}")
         return pd.DataFrame()
 
-# Platform tagging logic (final fix)
+# Platform tagging logic
 def identify_platform(row):
     src = str(row.get("Order UTM source", "")).lower()
     med = str(row.get("Order UTM medium", "")).lower()
@@ -68,7 +60,7 @@ def identify_platform(row):
     else:
         return "Other"
 
-# ROAS by platform
+# ROAS by Platform
 def platform_summary(shopify_df, spend_df):
     shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
     revenue = shopify_df[shopify_df["Platform"].isin(["Google Ads", "Meta Ads"])].groupby("Platform").agg(
@@ -80,7 +72,7 @@ def platform_summary(shopify_df, spend_df):
     summary["ROAS"] = summary["Revenue"] / summary["Spend"]
     return summary
 
-# ROAS by ad
+# ROAS by Ad Campaign
 def ad_summary(shopify_df, spend_df):
     shopify_df["Platform"] = shopify_df.apply(identify_platform, axis=1)
     shopify_df = shopify_df.rename(columns={"Order UTM campaign": "ad_name"})
@@ -92,13 +84,13 @@ def ad_summary(shopify_df, spend_df):
     merged["ROAS"] = merged["Revenue"] / merged["spend"]
     return merged
 
-# Load + combine
+# Load data
 shopify_df = load_shopify(shopify_file) if shopify_file else pd.DataFrame()
 meta_df = load_meta(meta_file) if meta_file else pd.DataFrame()
-google_df = load_google_fixed(google_file) if google_file else pd.DataFrame()
+google_df = load_google_per_campaign(google_file) if google_file else pd.DataFrame()
 spend_df = pd.concat([meta_df, google_df], ignore_index=True)
 
-# Output
+# Dashboard Output
 if not shopify_df.empty and not spend_df.empty:
     st.subheader("📊 ROAS by Platform")
     platform_df = platform_summary(shopify_df, spend_df)
@@ -109,4 +101,3 @@ if not shopify_df.empty and not spend_df.empty:
     st.dataframe(ad_df, use_container_width=True)
 else:
     st.warning("Upload both Shopify and at least one ad platform CSV to see ROAS reporting.")
-
